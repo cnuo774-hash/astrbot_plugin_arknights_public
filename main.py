@@ -1,24 +1,141 @@
+import astrbot.api.message_components as Comp
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
+from astrbot.api.message_components import Image
+import aiohttp
+import asyncio
+import datetime
 
-@register("helloworld", "YourName", "一个简单的 Hello World 插件", "1.0.0")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
+        self.session = aiohttp.ClientSession()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (compatible; AstrBotPlugin/1.0)"
+        })
+        # 缓存游戏数据
+        self._char_cache = None
+        self._item_cache = None
+        self._name_to_id = {}  # 初始化为字典
 
     async def initialize(self):
         """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""
+        await self._load_name_mapping()
 
-    # 注册指令的装饰器。指令名为 helloworld。注册成功后，发送 `/helloworld` 就会触发这个指令，并回复 `你好, {user_name}!`
-    @filter.command("helloworld")
-    async def helloworld(self, event: AstrMessageEvent):
-        """这是一个 hello world 指令""" # 这是 handler 的描述，将会被解析方便用户了解插件内容。建议填写。
-        user_name = event.get_sender_name()
-        message_str = event.message_str # 用户发的纯文本消息字符串
-        message_chain = event.get_messages() # 用户所发的消息的消息链 # from astrbot.api.message_components import *
-        logger.info(message_chain)
-        yield event.plain_result(f"Hello, {user_name}, 你发了 {message_str}!") # 发送一条纯文本消息
+    async def _load_name_mapping(self):
+        """加载中文名到游戏 ID 的映射"""
+        try:
+            url = "https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/character_table.json"
+            async with self.session.get(url, timeout=10) as r:
+                data = await r.json()
+    
+            for char_id, info in data.items():
+                if "name" in info:
+                    self._name_to_id[info["name"]] = {
+                        "id": char_id,
+                        "rarity": info.get("rarity", 0),
+                        "profession": info.get("profession", "未知")
+                    }
+            logger.info(f"加载了 {len(self._name_to_id)} 个干员数据")
+        except Exception as e:
+            logger.error(f"加载干员数据失败：{e}")
+            self._name_to_id = {}  # 确保失败时也是字典
+
+    async def github_get_game_data(self, filename: str):
+        """获取 GitHub 公开游戏数据"""
+        url = f"https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/{filename}"
+        try:
+            async with self.session.get(url, timeout=10) as r:
+                return await r.json()
+        except Exception as e:
+            logger.error(f"获取游戏数据失败: {e}")
+            return None
+
+    @filter.command("#查询干员")
+    async def query_operator(self, event: AstrMessageEvent, name: str=""):
+        """查询干员"""
+        if not name:
+            yield event.plain_result("请输入干员名称，如：#查询干员 阿米娅")
+            return
+        
+        # 获取干员数据
+        chars = await self.github_get_game_data("character_table.json")
+        if not chars:
+            yield event.plain_result("获取数据失败，请稍后重试")
+            return
+        
+        # 搜索匹配
+        matches = []
+        for char_id, data in chars.items():
+            if name in data.get("name", ""):
+                char_info = self._name_to_id.get(data.get("name"), {})
+                matches.append({
+                    "name": data.get("name"),
+                    "rarity": "★" * (data.get("rarity", 0) + 1),
+                    "profession": self._translate_profession(data.get("profession", "未知")),
+                    "description": data.get("itemDesc", "无描述")[:100] if data.get("itemDesc") else "无描述",
+                    "game_id": char_info.get("id", char_id)
+                })
+
+        if not matches:
+            yield event.plain_result(f"未找到名为「{name}」的干员")
+            return
+
+        result = ""
+        for m in matches[:1]:  # 限制显示数量
+            result += f"【{m['name']}】{m['rarity']}\n"
+            result += f"职业：{m['profession']}\n"
+            result += f"简介：{m['description']}\n\n"
+        
+        # 如果有匹配，发送结果和图片
+        if matches:
+            first_match = matches[0]
+            image_url = f"https://prts.wiki/images/立绘_{first_match['game_id']}_2.png"
+            chain = [
+                Comp.Plain(result.strip()),
+                Comp.Image.fromURL(image_url)
+            ]
+            yield event.chain_result(chain)
+
+    def _translate_profession(self, profession: str) -> str:
+        """翻译职业名称"""
+        profession_map = {
+            "WARRIOR": "近卫",
+            "SNIPER": "狙击",
+            "CASTER": "术师",
+            "TANK": "重装",
+            "SUPPORT": "辅助",
+            "MEDIC": "医疗",
+            "SPECIAL": "特种",
+            "PIONEER": "先锋"
+        }
+        return profession_map.get(profession, profession or "未知")
+
+    @filter.command("#今日素材")
+    async def get_today_farming(self, event: AstrMessageEvent):
+        '''获取今日开放关卡（公开数据推算）'''
+        # 根据星期几推算开放关卡
+        weekday = datetime.datetime.now().weekday()
+
+        # 关卡开放规律（公开知识）
+        schedule = {
+            0: "战术演习（经验本）+ 资源保障（龙门币）",
+            1: "固若金汤（重装/医疗芯片）+ 摧枯拉朽（狙击/术师芯片）",
+            2: "势不可挡（近卫/特种芯片）+ 身先士卒（先锋/辅助芯片）",
+            3: "战术演习 + 资源保障",
+            4: "固若金汤 + 摧枯拉朽",
+            5: "势不可挡 + 身先士卒",
+            6: "全部开放"
+        }
+
+        today = schedule.get(weekday, "未知")
+        result = f"今日（星期{weekday + 1}）开放关卡：\n{today}\n\n"
+
+        yield event.plain_result(result)
+
+
 
     async def terminate(self):
         """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
+        logger.info("明日方舟公开数据插件已卸载")
