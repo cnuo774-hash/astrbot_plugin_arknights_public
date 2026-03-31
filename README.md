@@ -41,4 +41,4 @@
 ## 数据来源
 
 - **游戏数据**: [Kengxxiao/ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData) - 明日方舟公开数据仓库
-- **立绘图片**: [PRTS Wiki](
+- **立绘图片**: [PRTS Wiki]
