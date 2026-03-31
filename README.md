@@ -1,14 +1,29 @@
-# astrbot-plugin-helloworld
+明日方舟公开数据查询插件
+一个基于 AstrBot 框架的明日方舟游戏数据查询插件，通过 GitHub 公开数据源提供干员信息查询和每日素材关卡提醒功能。
+功能特性
+🔍 干员查询 - 通过名称搜索干员信息，显示稀有度、职业、简介及立绘
+📅 今日素材 - 自动显示当前开放的资源关卡（经验本、龙门币、芯片本等）
+🖼️ 自动配图 - 查询结果附带干员立绘图片（来自 PRTS Wiki）
+⚡ 数据缓存 - 自动缓存游戏数据，提升响应速度
+安装方法
+将本插件文件夹放入 AstrBot 的 plugins 目录
+重启 AstrBot 或热重载插件
+插件将自动初始化并加载干员数据
+使用方法
+查询干员
+plain
+复制
+#查询干员 <干员名称>
+示例：
+plain
+复制
+#查询干员 阿米娅
+#查询干员 能天使
+查看今日开放关卡
+plain
+复制
+#今日素材
+数据来源
+游戏数据: Kengxxiao/ArknightsGameData - 明日方舟公开数据仓库
+立绘图片: PRTS Wiki
 
-AstrBot 插件模板 / A template plugin for AstrBot plugin feature
-
-> [!NOTE]
-> This repo is just a template of [AstrBot](https://github.com/AstrBotDevs/AstrBot) Plugin.
-> 
-> [AstrBot](https://github.com/AstrBotDevs/AstrBot) is an agentic assistant for both personal and group conversations. It can be deployed across dozens of mainstream instant messaging platforms, including QQ, Telegram, Feishu, DingTalk, Slack, LINE, Discord, Matrix, etc. In addition, it provides a reliable and extensible conversational AI infrastructure for individuals, developers, and teams. Whether you need a personal AI companion, an intelligent customer support agent, an automation assistant, or an enterprise knowledge base, AstrBot enables you to quickly build AI applications directly within your existing messaging workflows.
-
-# Supports
-
-- [AstrBot Repo](https://github.com/AstrBotDevs/AstrBot)
-- [AstrBot Plugin Development Docs (Chinese)](https://docs.astrbot.app/dev/star/plugin-new.html)
-- [AstrBot Plugin Development Docs (English)](https://docs.astrbot.app/en/dev/star/plugin-new.html)
