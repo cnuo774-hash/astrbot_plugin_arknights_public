@@ -1,5 +1,6 @@
 import astrbot.api.message_components as Comp
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from astrbot.api.event.filter import command
+from astrbot.api.event import AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 from astrbot.api.message_components import Image
@@ -52,7 +53,7 @@ class MyPlugin(Star):
             logger.error(f"获取游戏数据失败: {e}")
             return None
 
-    @filter.command("#查询干员")
+    @command("#查询干员")
     async def query_operator(self, event: AstrMessageEvent, name: str=""):
         """查询干员"""
         if not name:
@@ -112,7 +113,7 @@ class MyPlugin(Star):
         }
         return profession_map.get(profession, profession or "未知")
 
-    @filter.command("#今日素材")
+    @command("#今日素材")
     async def get_today_farming(self, event: AstrMessageEvent):
         '''获取今日开放关卡（公开数据推算）'''
         # 根据星期几推算开放关卡
