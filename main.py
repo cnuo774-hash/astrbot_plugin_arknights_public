@@ -259,7 +259,7 @@ class MyPlugin(Star):
         }
 
         today = schedule.get(weekday, "未知")
-        result = f"今日（星期{weekday + 1}）\n{today}\n\n"
+        result = f"今日（星期{weekday + 1}）\n{today}"
 
         yield event.plain_result(result)
 
