@@ -69,9 +69,11 @@ class MyPlugin(Star):
                         count = 0
                         for char_id, info in data.items():
                             if "name" in info:
+                                # 在加载缓存时就转换稀有度字段
+                                rarity_num = self._convert_rarity(info.get("rarity", 0))
                                 self._name_to_id[info["name"]] = {
                                     "id": char_id,
-                                    "rarity": info.get("rarity", 0),
+                                    "rarity": rarity_num,  # 存储转换后的整数
                                     "profession": info.get("profession", "未知")
                                 }
                                 count += 1
@@ -196,18 +198,13 @@ class MyPlugin(Star):
         for char_name, info in self._name_to_id.items():
             if name in char_name:
                 rarity_num = info.get("rarity", 0)
-                # 确保 rarity_num 是整数 (防御性编程)
-                if not isinstance(rarity_num, int):
-                    try:
-                        rarity_num = int(rarity_num)
-                    except (ValueError, TypeError):
-                        logger.warning(f"稀有度字段类型错误：{rarity_num}")
-                        rarity_num = 0
+                # rarity_num 应该已经是整数了，因为缓存时已经转换过
                 matches.append({
                     "name": char_name,
                     "rarity": "★" * (rarity_num + 1),
                     "profession": self._translate_profession(info.get("profession", "未知")),
-                    "game_id": info.get("id", "")
+                    "game_id": info.get("id", ""),
+                    "rarity_num": rarity_num  # 用于后续技能查询
                 })
 
         if not matches:
@@ -219,6 +216,11 @@ class MyPlugin(Star):
             result += f"【{m['name']}】{m['rarity']}\n"
             result += f"职业：{m['profession']}\n"
             result += f"ID: {m['game_id']}\n\n"
+            
+            # 获取技能描述
+            skill_desc = await self._get_operator_skills(m['game_id'], m['name'])
+            if skill_desc:
+                result += skill_desc
         
         # 如果有匹配，发送结果和图片
         if matches:
@@ -320,6 +322,44 @@ class MyPlugin(Star):
         yield event.plain_result(result)
 
 
+
+    async def _get_operator_skills(self, char_id: str, char_name: str) -> str:
+        """获取干员技能描述"""
+        try:
+            # 从 GitHub 获取技能数据
+            skills_data = await self.github_get_game_data("skill_table.json")
+            if not skills_data:
+                return ""
+            
+            # 查找该干员的技能
+            operator_skills = []
+            for skill_id, skill_info in skills_data.items():
+                # 技能 ID 通常包含干员 ID
+                if skill_id.startswith(char_id) or char_id in skill_id:
+                    skill_name = skill_info.get("name", "未知")
+                    # 获取技能描述（从 description 或 description_override）
+                    desc = skill_info.get("description", "")
+                    if not desc:
+                        desc = skill_info.get("description_override", "暂无描述")
+                    
+                    # 解析技能等级信息
+                    max_level = 7
+                    levels = skill_info.get("levels", [])
+                    if levels and len(levels) > 0:
+                        last_level = levels[-1]
+                        # 获取满级描述
+                        desc_override = last_level.get("description_override", desc)
+                        if desc_override:
+                            desc = desc_override
+                    
+                    operator_skills.append(f"技能：{skill_name}\n{desc}\n")
+            
+            if operator_skills:
+                return "\n".join(operator_skills[:3]) + "\n"  # 最多显示 3 个技能
+            return ""
+        except Exception as e:
+            logger.error(f"获取技能数据失败 {char_name}: {type(e).__name__}: {e}")
+            return ""
 
     async def terminate(self):
         """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
