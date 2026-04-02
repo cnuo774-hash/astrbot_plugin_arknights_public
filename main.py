@@ -7,6 +7,7 @@ from astrbot.api.message_components import Image
 import aiohttp
 import asyncio
 import datetime
+import json
 
 class MyPlugin(Star):
     def __init__(self, context: Context):
@@ -36,7 +37,8 @@ class MyPlugin(Star):
             
             for attempt in range(max_retries):
                 try:
-                    async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
+                    # 使用更长的超时时间 (60 秒)
+                    async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as r:
                         logger.debug(f"HTTP 状态码：{r.status} (尝试 {attempt + 1}/{max_retries})")
                         if r.status != 200:
                             logger.error(f"HTTP 错误：{r.status}")
@@ -50,8 +52,9 @@ class MyPlugin(Star):
                         text = await r.text()
                         logger.debug(f"响应大小：{len(text)} 字节")
                         
+                        # 手动解析 JSON，避免 MIME 类型问题
                         try:
-                            data = await r.json()
+                            data = json.loads(text)
                         except Exception as json_err:
                             logger.error(f"JSON 解析失败：{json_err}")
                             logger.error(f"响应内容前 200 字符：{text[:200]}")
@@ -81,7 +84,7 @@ class MyPlugin(Star):
                         logger.info(f"等待 {retry_delay} 秒后重试...")
                         await asyncio.sleep(retry_delay)
                     else:
-                        logger.error("加载干员数据超时 (15 秒)，请检查网络连接")
+                        logger.error("加载干员数据超时 (60 秒)，请检查网络连接")
                         self._name_to_id = {}
                         return
                 except aiohttp.ClientError as e:
@@ -112,14 +115,25 @@ class MyPlugin(Star):
             
             for attempt in range(max_retries):
                 try:
-                    async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
+                    # 使用更长的超时时间 (60 秒)
+                    async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as r:
                         if r.status != 200:
                             logger.error(f"HTTP 错误 {r.status}: {url} (尝试 {attempt + 1}/{max_retries})")
                             if attempt < max_retries - 1:
                                 await asyncio.sleep(retry_delay)
                                 continue
                             return None
-                        return await r.json()
+                        
+                        # 获取文本并手动解析 JSON
+                        text = await r.text()
+                        try:
+                            return json.loads(text)
+                        except Exception as json_err:
+                            logger.error(f"JSON 解析失败 {filename}: {json_err}")
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(retry_delay)
+                                continue
+                            return None
                 except asyncio.TimeoutError:
                     logger.warning(f"获取 {filename} 超时 (尝试 {attempt + 1}/{max_retries})")
                     if attempt < max_retries - 1:
