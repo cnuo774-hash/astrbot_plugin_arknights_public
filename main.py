@@ -233,8 +233,8 @@ class MyPlugin(Star):
             # 尝试多个图片源 (使用更可靠的源)
             image_urls = [
                 f"https://prts.wiki/images/立绘_{game_id}_2.png",
+                f"https://ak.hypergryph.com/assets/media/characters/{game_id}.png",  # 官服源
                 f"https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/character/{game_id}/icon.png",
-                f"https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/arcnits/{game_id}.png",
             ]
             
             # 尝试发送带图片的消息
@@ -242,7 +242,7 @@ class MyPlugin(Star):
                 try:
                     logger.debug(f"尝试加载图片：{img_url}")
                     # 先验证图片 URL 是否可访问
-                    async with self.session.get(img_url, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                    async with self.session.get(img_url, timeout=aiohttp.ClientTimeout(total=20)) as r:
                         if r.status == 200:
                             content_type = r.headers.get('Content-Type', '')
                             # 检查是否为图片类型或内容长度合理
@@ -257,6 +257,9 @@ class MyPlugin(Star):
                             else:
                                 logger.debug(f"图片源无效 {img_url}: HTTP {r.status}, Content-Type: {content_type}, Length: {content_length}")
                                 continue
+                except asyncio.TimeoutError:
+                    logger.warning(f"图片源超时 {img_url} (20 秒)")
+                    continue
                 except Exception as e:
                     logger.warning(f"图片源失败 {img_url}: {type(e).__name__}: {e}")
                     continue
@@ -317,11 +320,19 @@ class MyPlugin(Star):
             
             # 预处理技能数据，建立 char_id 到技能的映射
             count = 0
+            debug_count = 0  # 调试计数器
             for skill_id, skill_info in skills_data.items():
                 # 提取技能 ID 中的干员 ID 部分
                 # 技能 ID 格式通常为：skill_char_xxx_yyy 或 char_xxx_skill_xxx
                 char_id = None
-                if "_char_" in skill_id:
+                
+                # 尝试多种匹配模式
+                if skill_id.startswith("skill_char_"):
+                    # 格式：skill_char_002_amiya
+                    match = re.search(r'skill_(char_[^_]+_[^_]+)', skill_id)
+                    if match:
+                        char_id = match.group(1)
+                elif "_char_" in skill_id:
                     parts = skill_id.split("_char_")
                     if len(parts) > 1:
                         # 提取 char_xxx 部分
@@ -329,10 +340,11 @@ class MyPlugin(Star):
                         match = re.match(r'(char_[^_]+)', remainder)
                         if match:
                             char_id = match.group(1)
-                elif skill_id.startswith("char_"):
-                    parts = skill_id.split("_")
-                    if len(parts) >= 3:
-                        char_id = f"{parts[0]}_{parts[1]}_{parts[2]}"
+                elif skill_id.startswith("char_") and "_skill_" in skill_id:
+                    # 格式：char_002_amiya_skill_01
+                    parts = skill_id.split("_skill_")
+                    if parts:
+                        char_id = parts[0]
                 
                 if char_id:
                     if char_id not in self._skills_cache:
@@ -357,10 +369,17 @@ class MyPlugin(Star):
                         "desc": desc
                     })
                     count += 1
+                    
+                    # 打印前 10 个调试信息
+                    if debug_count < 10:
+                        logger.debug(f"技能 ID: {skill_id} -> 干员 ID: {char_id}, 技能名：{skill_name}")
+                        debug_count += 1
             
-            logger.info(f"成功预加载 {len(self._skills_cache)} 个干员的技能数据")
+            logger.info(f"成功预加载 {len(self._skills_cache)} 个干员的技能数据 (共处理 {count} 个技能)")
         except Exception as e:
             logger.error(f"预加载技能数据失败：{type(e).__name__}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def _get_cached_skills(self, char_id: str, char_name: str) -> str:
         """从缓存获取干员技能描述（无需网络请求）"""
