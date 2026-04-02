@@ -28,29 +28,116 @@ class MyPlugin(Star):
         """加载中文名到游戏 ID 的映射"""
         try:
             url = "https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/character_table.json"
-            async with self.session.get(url, timeout=10) as r:
-                data = await r.json()
-    
-            for char_id, info in data.items():
-                if "name" in info:
-                    self._name_to_id[info["name"]] = {
-                        "id": char_id,
-                        "rarity": info.get("rarity", 0),
-                        "profession": info.get("profession", "未知")
-                    }
-            logger.info(f"加载了 {len(self._name_to_id)} 个干员数据")
+            logger.info(f"正在从 GitHub 加载干员数据：{url}")
+            
+            # 增加超时时间和重试机制
+            max_retries = 3
+            retry_delay = 5  # 秒
+            
+            for attempt in range(max_retries):
+                try:
+                    async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
+                        logger.debug(f"HTTP 状态码：{r.status} (尝试 {attempt + 1}/{max_retries})")
+                        if r.status != 200:
+                            logger.error(f"HTTP 错误：{r.status}")
+                            if attempt < max_retries - 1:
+                                logger.info(f"等待 {retry_delay} 秒后重试...")
+                                await asyncio.sleep(retry_delay)
+                                continue
+                            self._name_to_id = {}
+                            return
+                            
+                        text = await r.text()
+                        logger.debug(f"响应大小：{len(text)} 字节")
+                        
+                        try:
+                            data = await r.json()
+                        except Exception as json_err:
+                            logger.error(f"JSON 解析失败：{json_err}")
+                            logger.error(f"响应内容前 200 字符：{text[:200]}")
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(retry_delay)
+                                continue
+                            self._name_to_id = {}
+                            return
+                    
+                        # 成功获取数据
+                        count = 0
+                        for char_id, info in data.items():
+                            if "name" in info:
+                                self._name_to_id[info["name"]] = {
+                                    "id": char_id,
+                                    "rarity": info.get("rarity", 0),
+                                    "profession": info.get("profession", "未知")
+                                }
+                                count += 1
+                                
+                        logger.info(f"成功加载 {count} 个干员数据")
+                        return  # 成功后退出
+                        
+                except asyncio.TimeoutError:
+                    logger.warning(f"加载干员数据超时 (尝试 {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        logger.info(f"等待 {retry_delay} 秒后重试...")
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        logger.error("加载干员数据超时 (15 秒)，请检查网络连接")
+                        self._name_to_id = {}
+                        return
+                except aiohttp.ClientError as e:
+                    logger.warning(f"网络请求失败：{type(e).__name__}: {e} (尝试 {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        logger.info(f"等待 {retry_delay} 秒后重试...")
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        logger.error(f"网络请求失败：{type(e).__name__}: {e}")
+                        logger.error("请检查是否能访问 GitHub Raw (raw.githubusercontent.com)")
+                        self._name_to_id = {}
+                        return
+                        
         except Exception as e:
-            logger.error(f"加载干员数据失败：{e}")
-            self._name_to_id = {}  # 确保失败时也是字典
+            logger.error(f"加载干员数据失败：{type(e).__name__}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            self._name_to_id = {}
 
     async def github_get_game_data(self, filename: str):
         """获取 GitHub 公开游戏数据"""
         url = f"https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/excel/{filename}"
         try:
-            async with self.session.get(url, timeout=10) as r:
-                return await r.json()
+            logger.debug(f"请求游戏数据：{url}")
+            # 增加超时时间和重试机制
+            max_retries = 3
+            retry_delay = 5
+            
+            for attempt in range(max_retries):
+                try:
+                    async with self.session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
+                        if r.status != 200:
+                            logger.error(f"HTTP 错误 {r.status}: {url} (尝试 {attempt + 1}/{max_retries})")
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(retry_delay)
+                                continue
+                            return None
+                        return await r.json()
+                except asyncio.TimeoutError:
+                    logger.warning(f"获取 {filename} 超时 (尝试 {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        logger.error(f"获取 {filename} 超时")
+                        return None
+                except aiohttp.ClientError as e:
+                    logger.warning(f"网络请求失败 {filename}: {type(e).__name__}: {e} (尝试 {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(retry_delay)
+                    else:
+                        logger.error(f"网络请求失败 {filename}: {type(e).__name__}: {e}")
+                        return None
+                        
+            return None
         except Exception as e:
-            logger.error(f"获取游戏数据失败: {e}")
+            logger.error(f"获取游戏数据失败 {filename}: {type(e).__name__}: {e}")
             return None
 
     @command("#查询干员")
@@ -93,11 +180,15 @@ class MyPlugin(Star):
         if matches:
             first_match = matches[0]
             image_url = f"https://prts.wiki/images/立绘_{first_match['game_id']}_2.png"
-            chain = [
-                Comp.Plain(result.strip()),
-                Comp.Image.fromURL(image_url)
-            ]
-            yield event.chain_result(chain)
+            try:
+                chain = [
+                    Comp.Plain(result.strip()),
+                    Comp.Image.fromURL(image_url)
+                ]
+                yield event.chain_result(chain)
+            except Exception as e:
+                logger.warning(f"加载图片失败：{e}，仅发送文本信息")
+                yield event.plain_result(result.strip())
 
     def _translate_profession(self, profession: str) -> str:
         """翻译职业名称"""
