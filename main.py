@@ -21,10 +21,13 @@ class MyPlugin(Star):
         self._char_cache = None
         self._item_cache = None
         self._name_to_id = {}  # 初始化为字典
+        self._skills_cache = {}  # 缓存技能数据：{char_id: [skill_info, ...]}
 
     async def initialize(self):
         """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""
         await self._load_name_mapping()
+        # 预加载技能数据到缓存
+        await self._preload_skills()
 
     async def _load_name_mapping(self):
         """加载中文名到游戏 ID 的映射"""
@@ -100,7 +103,7 @@ class MyPlugin(Star):
                         logger.error("请检查是否能访问 GitHub Raw (raw.githubusercontent.com)")
                         self._name_to_id = {}
                         return
-                        
+
         except Exception as e:
             logger.error(f"加载干员数据失败：{type(e).__name__}: {e}")
             import traceback
@@ -217,8 +220,8 @@ class MyPlugin(Star):
             result += f"职业：{m['profession']}\n"
             result += f"ID: {m['game_id']}\n\n"
             
-            # 获取技能描述
-            skill_desc = await self._get_operator_skills(m['game_id'], m['name'])
+            # 从缓存获取技能描述（无需网络请求）
+            skill_desc = self._get_cached_skills(m['game_id'], m['name'])
             if skill_desc:
                 result += skill_desc
         
@@ -231,6 +234,7 @@ class MyPlugin(Star):
             image_urls = [
                 f"https://prts.wiki/images/立绘_{game_id}_2.png",
                 f"https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/character/{game_id}/icon.png",
+                f"https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData/master/zh_CN/gamedata/arcnits/{game_id}.png",
             ]
             
             # 尝试发送带图片的消息
@@ -238,17 +242,21 @@ class MyPlugin(Star):
                 try:
                     logger.debug(f"尝试加载图片：{img_url}")
                     # 先验证图片 URL 是否可访问
-                    async with self.session.get(img_url, timeout=aiohttp.ClientTimeout(total=10)) as r:
-                        if r.status == 200 and 'image' in r.headers.get('Content-Type', ''):
-                            chain = [
-                                Comp.Plain(result.strip()),
-                                Comp.Image.fromURL(img_url)
-                            ]
-                            yield event.chain_result(chain)
-                            return  # 成功后直接返回
-                        else:
-                            logger.debug(f"图片源无效 {img_url}: HTTP {r.status}")
-                            continue
+                    async with self.session.get(img_url, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                        if r.status == 200:
+                            content_type = r.headers.get('Content-Type', '')
+                            # 检查是否为图片类型或内容长度合理
+                            content_length = int(r.headers.get('Content-Length', 0))
+                            if ('image' in content_type or content_length > 1000) and content_length < 10 * 1024 * 1024:
+                                chain = [
+                                    Comp.Plain(result.strip()),
+                                    Comp.Image.fromURL(img_url)
+                                ]
+                                yield event.chain_result(chain)
+                                return  # 成功后直接返回
+                            else:
+                                logger.debug(f"图片源无效 {img_url}: HTTP {r.status}, Content-Type: {content_type}, Length: {content_length}")
+                                continue
                 except Exception as e:
                     logger.warning(f"图片源失败 {img_url}: {type(e).__name__}: {e}")
                     continue
@@ -298,6 +306,81 @@ class MyPlugin(Star):
         }
         return profession_map.get(profession, profession or "未知")
 
+    async def _preload_skills(self):
+        """预加载技能数据到缓存"""
+        try:
+            logger.info("正在预加载技能数据...")
+            skills_data = await self.github_get_game_data("skill_table.json")
+            if not skills_data:
+                logger.warning("技能数据加载失败")
+                return
+            
+            # 预处理技能数据，建立 char_id 到技能的映射
+            count = 0
+            for skill_id, skill_info in skills_data.items():
+                # 提取技能 ID 中的干员 ID 部分
+                # 技能 ID 格式通常为：skill_char_xxx_yyy 或 char_xxx_skill_xxx
+                char_id = None
+                if "_char_" in skill_id:
+                    parts = skill_id.split("_char_")
+                    if len(parts) > 1:
+                        # 提取 char_xxx 部分
+                        remainder = parts[1]
+                        match = re.match(r'(char_[^_]+)', remainder)
+                        if match:
+                            char_id = match.group(1)
+                elif skill_id.startswith("char_"):
+                    parts = skill_id.split("_")
+                    if len(parts) >= 3:
+                        char_id = f"{parts[0]}_{parts[1]}_{parts[2]}"
+                
+                if char_id:
+                    if char_id not in self._skills_cache:
+                        self._skills_cache[char_id] = []
+                    
+                    # 解析技能信息
+                    skill_name = skill_info.get("name", "未知")
+                    desc = skill_info.get("description", "")
+                    if not desc:
+                        desc = skill_info.get("description_override", "暂无描述")
+                    
+                    # 获取满级描述
+                    levels = skill_info.get("levels", [])
+                    if levels and len(levels) > 0:
+                        last_level = levels[-1]
+                        desc_override = last_level.get("description_override", desc)
+                        if desc_override:
+                            desc = desc_override
+                    
+                    self._skills_cache[char_id].append({
+                        "name": skill_name,
+                        "desc": desc
+                    })
+                    count += 1
+            
+            logger.info(f"成功预加载 {len(self._skills_cache)} 个干员的技能数据")
+        except Exception as e:
+            logger.error(f"预加载技能数据失败：{type(e).__name__}: {e}")
+
+    def _get_cached_skills(self, char_id: str, char_name: str) -> str:
+        """从缓存获取干员技能描述（无需网络请求）"""
+        try:
+            if char_id not in self._skills_cache or not self._skills_cache[char_id]:
+                return ""
+            
+            operator_skills = []
+            for skill_info in self._skills_cache[char_id]:
+                skill_name = skill_info.get("name", "未知")
+                desc = skill_info.get("desc", "暂无描述")
+                operator_skills.append(f"技能：{skill_name}\n{desc}\n")
+            
+            if operator_skills:
+                return "\n".join(operator_skills[:3]) + "\n"  # 最多显示 3 个技能
+            return ""
+        except Exception as e:
+            logger.error(f"读取技能缓存失败 {char_name}: {type(e).__name__}: {e}")
+            return ""
+
     @command("今日素材")
     @regex(r"/?今日素材$")
     async def get_today_farming(self, event: AstrMessageEvent):
@@ -322,44 +405,6 @@ class MyPlugin(Star):
         yield event.plain_result(result)
 
 
-
-    async def _get_operator_skills(self, char_id: str, char_name: str) -> str:
-        """获取干员技能描述"""
-        try:
-            # 从 GitHub 获取技能数据
-            skills_data = await self.github_get_game_data("skill_table.json")
-            if not skills_data:
-                return ""
-            
-            # 查找该干员的技能
-            operator_skills = []
-            for skill_id, skill_info in skills_data.items():
-                # 技能 ID 通常包含干员 ID
-                if skill_id.startswith(char_id) or char_id in skill_id:
-                    skill_name = skill_info.get("name", "未知")
-                    # 获取技能描述（从 description 或 description_override）
-                    desc = skill_info.get("description", "")
-                    if not desc:
-                        desc = skill_info.get("description_override", "暂无描述")
-                    
-                    # 解析技能等级信息
-                    max_level = 7
-                    levels = skill_info.get("levels", [])
-                    if levels and len(levels) > 0:
-                        last_level = levels[-1]
-                        # 获取满级描述
-                        desc_override = last_level.get("description_override", desc)
-                        if desc_override:
-                            desc = desc_override
-                    
-                    operator_skills.append(f"技能：{skill_name}\n{desc}\n")
-            
-            if operator_skills:
-                return "\n".join(operator_skills[:3]) + "\n"  # 最多显示 3 个技能
-            return ""
-        except Exception as e:
-            logger.error(f"获取技能数据失败 {char_name}: {type(e).__name__}: {e}")
-            return ""
 
     async def terminate(self):
         """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
