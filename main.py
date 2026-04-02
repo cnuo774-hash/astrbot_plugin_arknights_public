@@ -196,7 +196,7 @@ class MyPlugin(Star):
         for char_name, info in self._name_to_id.items():
             if name in char_name:
                 rarity_num = info.get("rarity", 0)
-                # 确保 rarity_num 是整数
+                # 确保 rarity_num 是整数 (防御性编程)
                 if not isinstance(rarity_num, int):
                     try:
                         rarity_num = int(rarity_num)
@@ -223,16 +223,37 @@ class MyPlugin(Star):
         # 如果有匹配，发送结果和图片
         if matches:
             first_match = matches[0]
-            image_url = f"https://prts.wiki/images/立绘_{first_match['game_id']}_2.png"
-            try:
-                chain = [
-                    Comp.Plain(result.strip()),
-                    Comp.Image.fromURL(image_url)
-                ]
-                yield event.chain_result(chain)
-            except Exception as e:
-                logger.warning(f"加载图片失败：{e}，仅发送文本信息")
-                yield event.plain_result(result.strip())
+            game_id = first_match['game_id']
+            
+            # 尝试多个图片源 (使用更可靠的源)
+            image_urls = [
+                f"https://prts.wiki/images/立绘_{game_id}_2.png",
+                f"https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/character/{game_id}/icon.png",
+            ]
+            
+            # 尝试发送带图片的消息
+            for img_url in image_urls:
+                try:
+                    logger.debug(f"尝试加载图片：{img_url}")
+                    # 先验证图片 URL 是否可访问
+                    async with self.session.get(img_url, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                        if r.status == 200 and 'image' in r.headers.get('Content-Type', ''):
+                            chain = [
+                                Comp.Plain(result.strip()),
+                                Comp.Image.fromURL(img_url)
+                            ]
+                            yield event.chain_result(chain)
+                            return  # 成功后直接返回
+                        else:
+                            logger.debug(f"图片源无效 {img_url}: HTTP {r.status}")
+                            continue
+                except Exception as e:
+                    logger.warning(f"图片源失败 {img_url}: {type(e).__name__}: {e}")
+                    continue
+            
+            # 所有图片源都失败，只发送文本
+            logger.warning("所有图片源加载失败，仅发送文本信息")
+            yield event.plain_result(result.strip())
 
     def _convert_rarity(self, rarity_value):
         """转换稀有度字段为数字
