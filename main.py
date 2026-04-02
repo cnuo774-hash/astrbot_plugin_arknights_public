@@ -196,6 +196,13 @@ class MyPlugin(Star):
         for char_name, info in self._name_to_id.items():
             if name in char_name:
                 rarity_num = info.get("rarity", 0)
+                # 确保 rarity_num 是整数
+                if not isinstance(rarity_num, int):
+                    try:
+                        rarity_num = int(rarity_num)
+                    except (ValueError, TypeError):
+                        logger.warning(f"稀有度字段类型错误：{rarity_num}")
+                        rarity_num = 0
                 matches.append({
                     "name": char_name,
                     "rarity": "★" * (rarity_num + 1),
