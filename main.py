@@ -1,5 +1,5 @@
 import astrbot.api.message_components as Comp
-from astrbot.api.event.filter import command
+from astrbot.api.event.filter import command, regex
 from astrbot.api.event import AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
@@ -8,6 +8,7 @@ import aiohttp
 import asyncio
 import datetime
 import json
+import re
 
 class MyPlugin(Star):
     def __init__(self, context: Context):
@@ -154,9 +155,16 @@ class MyPlugin(Star):
             logger.error(f"获取游戏数据失败 {filename}: {type(e).__name__}: {e}")
             return None
 
-    @command("#查询干员")
+    @command("查询干员")
+    @regex(r"/?查询干员\s*(.*)")
     async def query_operator(self, event: AstrMessageEvent, name: str=""):
         """查询干员"""
+        # 从正则匹配中获取参数
+        message_str = event.get_message_str().strip()
+        match = re.search(r"/?查询干员\s*(.*)", message_str)
+        if match:
+            name = match.group(1).strip()
+        
         if not name:
             yield event.plain_result("请输入干员名称，如：#查询干员 阿米娅")
             return
@@ -218,7 +226,8 @@ class MyPlugin(Star):
         }
         return profession_map.get(profession, profession or "未知")
 
-    @command("#今日素材")
+    @command("今日素材")
+    @regex(r"/?今日素材$")
     async def get_today_farming(self, event: AstrMessageEvent):
         '''获取今日开放关卡（公开数据推算）'''
         # 根据星期几推算开放关卡
