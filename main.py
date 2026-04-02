@@ -169,23 +169,37 @@ class MyPlugin(Star):
             yield event.plain_result("请输入干员名称，如：#查询干员 阿米娅")
             return
         
-        # 获取干员数据
-        chars = await self.github_get_game_data("character_table.json")
-        if not chars:
-            yield event.plain_result("获取数据失败，请稍后重试")
-            return
+        # 优先使用缓存的数据进行查询
+        if not self._name_to_id:
+            # 如果缓存为空，尝试从 GitHub 加载
+            logger.info("缓存为空，正在加载干员数据...")
+            chars = await self.github_get_game_data("character_table.json")
+            if not chars:
+                yield event.plain_result("获取数据失败，请稍后重试")
+                return
+            
+            # 更新缓存
+            count = 0
+            for char_id, info in chars.items():
+                if "name" in info:
+                    self._name_to_id[info["name"]] = {
+                        "id": char_id,
+                        "rarity": int(info.get("rarity", 0)),
+                        "profession": info.get("profession", "未知")
+                    }
+                    count += 1
+            logger.info(f"成功加载 {count} 个干员数据到缓存")
         
-        # 搜索匹配
+        # 在缓存中搜索匹配
         matches = []
-        for char_id, data in chars.items():
-            if name in data.get("name", ""):
-                char_info = self._name_to_id.get(data.get("name"), {})
+        for char_name, info in self._name_to_id.items():
+            if name in char_name:
+                rarity_num = int(info.get("rarity", 0))
                 matches.append({
-                    "name": data.get("name"),
-                    "rarity": "★" * (data.get("rarity", 0) + 1),
-                    "profession": self._translate_profession(data.get("profession", "未知")),
-                    "description": data.get("itemDesc", "无描述")[:100] if data.get("itemDesc") else "无描述",
-                    "game_id": char_info.get("id", char_id)
+                    "name": char_name,
+                    "rarity": "★" * (rarity_num + 1),
+                    "profession": self._translate_profession(info.get("profession", "未知")),
+                    "game_id": info.get("id", "")
                 })
 
         if not matches:
@@ -196,7 +210,7 @@ class MyPlugin(Star):
         for m in matches[:1]:  # 限制显示数量
             result += f"【{m['name']}】{m['rarity']}\n"
             result += f"职业：{m['profession']}\n"
-            result += f"简介：{m['description']}\n\n"
+            result += f"ID: {m['game_id']}\n\n"
         
         # 如果有匹配，发送结果和图片
         if matches:
