@@ -182,9 +182,10 @@ class MyPlugin(Star):
             count = 0
             for char_id, info in chars.items():
                 if "name" in info:
+                    rarity_num = self._convert_rarity(info.get("rarity", 0))
                     self._name_to_id[info["name"]] = {
                         "id": char_id,
-                        "rarity": int(info.get("rarity", 0)),
+                        "rarity": rarity_num,
                         "profession": info.get("profession", "未知")
                     }
                     count += 1
@@ -194,7 +195,7 @@ class MyPlugin(Star):
         matches = []
         for char_name, info in self._name_to_id.items():
             if name in char_name:
-                rarity_num = int(info.get("rarity", 0))
+                rarity_num = info.get("rarity", 0)
                 matches.append({
                     "name": char_name,
                     "rarity": "★" * (rarity_num + 1),
@@ -225,6 +226,33 @@ class MyPlugin(Star):
             except Exception as e:
                 logger.warning(f"加载图片失败：{e}，仅发送文本信息")
                 yield event.plain_result(result.strip())
+
+    def _convert_rarity(self, rarity_value):
+        """转换稀有度字段为数字
+        
+        Args:
+            rarity_value: 可能是数字或 TIER_X 格式的字符串
+            
+        Returns:
+            int: 稀有度数字
+        """
+        if isinstance(rarity_value, int):
+            return rarity_value
+        if isinstance(rarity_value, str):
+            # 处理 TIER_0, TIER_1, TIER_2 等格式
+            if rarity_value.startswith("TIER_"):
+                try:
+                    return int(rarity_value.split("_")[1])
+                except (IndexError, ValueError):
+                    logger.warning(f"无法解析稀有度：{rarity_value}")
+                    return 0
+            # 尝试直接转换为数字
+            try:
+                return int(rarity_value)
+            except ValueError:
+                logger.warning(f"无法转换稀有度：{rarity_value}")
+                return 0
+        return 0
 
     def _translate_profession(self, profession: str) -> str:
         """翻译职业名称"""
