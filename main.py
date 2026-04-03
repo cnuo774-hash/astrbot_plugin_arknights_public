@@ -230,20 +230,21 @@ class MyPlugin(Star):
             first_match = matches[0]
             game_id = first_match['game_id']
             
-            # 尝试多个图片源 (使用更可靠的源)
+            # 尝试多个图片源 (使用更可靠的源，调整顺序和超时时间)
             image_urls = [
-                f"https://prts.wiki/images/立绘_{game_id}_2.png",
-                f"https://ak.hypergryph.com/assets/media/characters/{game_id}.png",  # 官服源
-                f"https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/character/{game_id}/icon.png",
+                f"https://prts.wiki/images/立绘_{game_id}_2.png",  # PRTS Wiki (较稳定)
                 f"https://cdn.jsdelivr.net/gh/yuanyan3060/ArknightsGameResource@main/character/{game_id}/icon.png",  # JSDELivr 镜像
+                f"https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/character/{game_id}/icon.png",
+                f"https://ak.hypergryph.com/assets/media/characters/{game_id}.png",  # 官服源 (可能限制访问)
             ]
             
             # 尝试发送带图片的消息
+            success = False
             for img_url in image_urls:
                 try:
                     logger.debug(f"尝试加载图片：{img_url}")
                     # 先验证图片 URL 是否可访问
-                    async with self.session.get(img_url, timeout=aiohttp.ClientTimeout(total=20)) as r:
+                    async with self.session.get(img_url, timeout=aiohttp.ClientTimeout(total=15)) as r:
                         if r.status == 200:
                             content_type = r.headers.get('Content-Type', '')
                             # 检查是否为图片类型或内容长度合理
@@ -255,6 +256,7 @@ class MyPlugin(Star):
                                     Comp.Image.fromURL(img_url)
                                 ]
                                 yield event.chain_result(chain)
+                                success = True
                                 return  # 成功后直接返回
                             else:
                                 logger.debug(f"图片源无效 {img_url}: Content-Type: {content_type}, Length: {content_length}")
@@ -263,7 +265,7 @@ class MyPlugin(Star):
                             logger.debug(f"图片源返回错误 {img_url}: HTTP {r.status}")
                             continue
                 except asyncio.TimeoutError:
-                    logger.warning(f"图片源超时 {img_url} (20 秒)")
+                    logger.warning(f"图片源超时 {img_url} (15 秒)")
                     continue
                 except aiohttp.ClientError as e:
                     logger.warning(f"图片源请求失败 {img_url}: {type(e).__name__}: {e}")
@@ -273,8 +275,9 @@ class MyPlugin(Star):
                     continue
             
             # 所有图片源都失败，只发送文本
-            logger.warning("所有图片源加载失败，仅发送文本信息")
-            yield event.plain_result(result.strip())
+            if not success:
+                logger.warning("所有图片源加载失败，仅发送文本信息")
+                yield event.plain_result(result.strip())
 
     def _convert_rarity(self, rarity_value):
         """转换稀有度字段为数字
@@ -326,20 +329,29 @@ class MyPlugin(Star):
                 logger.warning("技能数据加载失败")
                 return
             
-            logger.debug(f"技能数据总数：{len(skills_data)}")
+            logger.info(f"技能数据总数：{len(skills_data)}")
             
             # 预处理技能数据，建立 char_id 到技能的映射
             count = 0
+            failed_count = 0
             debug_count = 0  # 调试计数器
+            
+            # 打印前几个技能 ID 来帮助调试
+            for i, (skill_id, skill_info) in enumerate(skills_data.items()):
+                if i < 3:  # 只打印前 3 个
+                    logger.info(f"示例技能 ID[{i}]: {skill_id}")
+            
             for skill_id, skill_info in skills_data.items():
                 # 提取技能 ID 中的干员 ID 部分
                 # 技能 ID 格式通常为：skill_char_xxx_yyy 或 char_xxx_skill_xxx
                 char_id = None
                 
                 # 尝试多种匹配模式
-                if skill_id.startswith("skill_char_"):
-                    # 格式：skill_char_002_amiya
+                if skill_id.startswith("skill_"):
+                    # 格式：skill_char_002_amiya 或 skill_002_amiya
                     match = re.search(r'skill_(char_[^_]+_[^_]+)', skill_id)
+                    if not match:
+                        match = re.search(r'skill_(char_[a-zA-Z0-9_]+)', skill_id)
                     if match:
                         char_id = match.group(1)
                 elif "_char_" in skill_id:
@@ -361,6 +373,13 @@ class MyPlugin(Star):
                     char_id_match = re.search(r'(char_[^_\s]+)', skill_id)
                     if char_id_match:
                         char_id = char_id_match.group(1)
+                
+                # 如果还是找不到，打印调试信息
+                if not char_id:
+                    if failed_count < 5:  # 只打印前 5 个失败的
+                        logger.warning(f"无法提取干员 ID: skill_id={skill_id}")
+                        failed_count += 1
+                    continue
                 
                 if char_id:
                     if char_id not in self._skills_cache:
@@ -391,7 +410,7 @@ class MyPlugin(Star):
                         logger.debug(f"技能 ID: {skill_id} -> 干员 ID: {char_id}, 技能名：{skill_name}")
                         debug_count += 1
             
-            logger.info(f"成功预加载 {len(self._skills_cache)} 个干员的技能数据 (共处理 {count} 个技能)")
+            logger.info(f"成功预加载 {len(self._skills_cache)} 个干员的技能数据 (共处理 {count} 个技能，失败 {failed_count} 个)")
         except Exception as e:
             logger.error(f"预加载技能数据失败：{type(e).__name__}: {e}")
             import traceback
