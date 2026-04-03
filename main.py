@@ -234,6 +234,7 @@ class MyPlugin(Star):
             image_urls = [
                 f"https://prts.wiki/images/立绘_{game_id}_2.png",  # PRTS Wiki (较稳定)
                 f"https://cdn.jsdelivr.net/gh/yuanyan3060/ArknightsGameResource@main/character/{game_id}/icon.png",  # JSDELivr 镜像
+                f"https://fastly.jsdelivr.net/gh/yuanyan3060/ArknightsGameResource@main/character/{game_id}/icon.png",  # Fastly CDN
                 f"https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/character/{game_id}/icon.png",
                 f"https://ak.hypergryph.com/assets/media/characters/{game_id}.png",  # 官服源 (可能限制访问)
             ]
@@ -341,17 +342,33 @@ class MyPlugin(Star):
                 if i < 3:  # 只打印前 3 个
                     logger.info(f"示例技能 ID[{i}]: {skill_id}")
             
+            # 搜索阿米娅的技能来帮助调试
+            amiya_skills = [sid for sid in skills_data.keys() if 'amiya' in sid.lower()]
+            if amiya_skills:
+                logger.info(f"找到阿米娅的技能 ID: {amiya_skills[:5]}")  # 最多显示 5 个
+            
             for skill_id, skill_info in skills_data.items():
                 # 提取技能 ID 中的干员 ID 部分
-                # 技能 ID 格式通常为：skill_char_xxx_yyy 或 char_xxx_skill_xxx
+                # 技能 ID 格式通常为：skcom_charge_cost[1] 或 char_xxx_skill_xxx
                 char_id = None
                 
                 # 尝试多种匹配模式
-                if skill_id.startswith("skill_"):
+                if "[" in skill_id and "]" in skill_id:
+                    # 格式：skcom_charge_cost[1], skcom_assist_cost[2] 等
+                    # 这些可能是通用技能，不是特定干员的技能
+                    match = re.search(r'^([^\[]+)\[', skill_id)
+                    if match:
+                        base_id = match.group(1)
+                        # 检查是否包含 char 字样
+                        char_match = re.search(r'(char_[^_]+_[^_]+)', base_id)
+                        if char_match:
+                            char_id = char_match.group(1)
+                        else:
+                            # 跳过通用技能
+                            continue
+                elif skill_id.startswith("skill_"):
                     # 格式：skill_char_002_amiya 或 skill_002_amiya
-                    match = re.search(r'skill_(char_[^_]+_[^_]+)', skill_id)
-                    if not match:
-                        match = re.search(r'skill_(char_[a-zA-Z0-9_]+)', skill_id)
+                    match = re.search(r'skill_(char_[a-zA-Z0-9_]+)', skill_id)
                     if match:
                         char_id = match.group(1)
                 elif "_char_" in skill_id:
@@ -368,7 +385,7 @@ class MyPlugin(Star):
                     if parts:
                         char_id = parts[0]
                 else:
-                    # 新增：尝试从 skill_info 中查找 char_id
+                    # 尝试从 skill_info 中查找 char_id
                     # 有些技能可能直接关联到干员 ID
                     char_id_match = re.search(r'(char_[^_\s]+)', skill_id)
                     if char_id_match:
@@ -411,6 +428,12 @@ class MyPlugin(Star):
                         debug_count += 1
             
             logger.info(f"成功预加载 {len(self._skills_cache)} 个干员的技能数据 (共处理 {count} 个技能，失败 {failed_count} 个)")
+            
+            # 调试：检查阿米娅的技能是否在缓存中
+            if 'char_002_amiya' in self._skills_cache:
+                logger.info(f"✓ 阿米娅的技能已缓存：{len(self._skills_cache['char_002_amiya'])} 个技能")
+            else:
+                logger.warning("✗ 阿米娅的技能未找到缓存")
         except Exception as e:
             logger.error(f"预加载技能数据失败：{type(e).__name__}: {e}")
             import traceback
