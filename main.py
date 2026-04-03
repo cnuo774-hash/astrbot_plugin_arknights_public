@@ -235,6 +235,7 @@ class MyPlugin(Star):
                 f"https://prts.wiki/images/立绘_{game_id}_2.png",
                 f"https://ak.hypergryph.com/assets/media/characters/{game_id}.png",  # 官服源
                 f"https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/character/{game_id}/icon.png",
+                f"https://cdn.jsdelivr.net/gh/yuanyan3060/ArknightsGameResource@main/character/{game_id}/icon.png",  # JSDELivr 镜像
             ]
             
             # 尝试发送带图片的消息
@@ -247,6 +248,7 @@ class MyPlugin(Star):
                             content_type = r.headers.get('Content-Type', '')
                             # 检查是否为图片类型或内容长度合理
                             content_length = int(r.headers.get('Content-Length', 0))
+                            logger.debug(f"图片源响应 {img_url}: HTTP {r.status}, Content-Type: {content_type}, Length: {content_length}")
                             if ('image' in content_type or content_length > 1000) and content_length < 10 * 1024 * 1024:
                                 chain = [
                                     Comp.Plain(result.strip()),
@@ -255,10 +257,16 @@ class MyPlugin(Star):
                                 yield event.chain_result(chain)
                                 return  # 成功后直接返回
                             else:
-                                logger.debug(f"图片源无效 {img_url}: HTTP {r.status}, Content-Type: {content_type}, Length: {content_length}")
+                                logger.debug(f"图片源无效 {img_url}: Content-Type: {content_type}, Length: {content_length}")
                                 continue
+                        else:
+                            logger.debug(f"图片源返回错误 {img_url}: HTTP {r.status}")
+                            continue
                 except asyncio.TimeoutError:
                     logger.warning(f"图片源超时 {img_url} (20 秒)")
+                    continue
+                except aiohttp.ClientError as e:
+                    logger.warning(f"图片源请求失败 {img_url}: {type(e).__name__}: {e}")
                     continue
                 except Exception as e:
                     logger.warning(f"图片源失败 {img_url}: {type(e).__name__}: {e}")
@@ -318,6 +326,8 @@ class MyPlugin(Star):
                 logger.warning("技能数据加载失败")
                 return
             
+            logger.debug(f"技能数据总数：{len(skills_data)}")
+            
             # 预处理技能数据，建立 char_id 到技能的映射
             count = 0
             debug_count = 0  # 调试计数器
@@ -345,6 +355,12 @@ class MyPlugin(Star):
                     parts = skill_id.split("_skill_")
                     if parts:
                         char_id = parts[0]
+                else:
+                    # 新增：尝试从 skill_info 中查找 char_id
+                    # 有些技能可能直接关联到干员 ID
+                    char_id_match = re.search(r'(char_[^_\s]+)', skill_id)
+                    if char_id_match:
+                        char_id = char_id_match.group(1)
                 
                 if char_id:
                     if char_id not in self._skills_cache:
