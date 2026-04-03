@@ -332,6 +332,24 @@ class MyPlugin(Star):
             
             logger.info(f"技能数据总数：{len(skills_data)}")
             
+            # 先加载干员数据来建立英文名到 char_id 的映射
+            chars_data = await self.github_get_game_data("character_table.json")
+            if not chars_data:
+                logger.warning("无法加载干员数据，技能解析可能不完整")
+                chars_data = {}
+            
+            # 建立英文名到 char_id 的映射
+            en_name_to_char_id = {}
+            for char_id, info in chars_data.items():
+                if "name" in info:
+                    en_name = info["name"]
+                    # 存储多个版本：原名、小写、去除空格等
+                    en_name_to_char_id[en_name.lower()] = char_id
+                    # 也存储不带空格的版本
+                    en_name_to_char_id[en_name.replace(" ", "").lower()] = char_id
+            
+            logger.info(f"建立了 {len(en_name_to_char_id)} 个干员英文名到 ID 的映射")
+            
             # 预处理技能数据，建立 char_id 到技能的映射
             count = 0
             failed_count = 0
@@ -347,13 +365,45 @@ class MyPlugin(Star):
             if amiya_skills:
                 logger.info(f"找到阿米娅的技能 ID: {amiya_skills[:5]}")  # 最多显示 5 个
             
+            # 分析技能 ID 格式，帮助调试
+            skill_formats = {}
+            for skill_id in list(skills_data.keys())[:20]:
+                if skill_id.startswith('skchr_'):
+                    skill_formats[skill_id] = 'skchr_'
+                elif skill_id.startswith('skcom_'):
+                    skill_formats[skill_id] = 'skcom_'
+                elif '[' in skill_id:
+                    skill_formats[skill_id] = 'with_brackets'
+                else:
+                    skill_formats[skill_id] = 'other'
+            logger.info(f"技能 ID 格式示例：{skill_formats}")
+            
             for skill_id, skill_info in skills_data.items():
                 # 提取技能 ID 中的干员 ID 部分
-                # 技能 ID 格式通常为：skcom_charge_cost[1] 或 char_xxx_skill_xxx
+                # 技能 ID 格式：skchr_amiya_2, skchr_amiya2_1, char_002_amiya_skill_01 等
                 char_id = None
                 
                 # 尝试多种匹配模式
-                if "[" in skill_id and "]" in skill_id:
+                if skill_id.startswith("skchr_"):
+                    # 格式：skchr_amiya_2, skchr_amiya2_1, skchr_blackd_1
+                    # 提取干员英文名部分
+                    match = re.search(r'skchr_([^_]+)_\d+', skill_id)
+                    if match:
+                        char_en_name = match.group(1).lower()  # 如：amiya, amiya2, blackd
+                        # 在映射表中查找
+                        if char_en_name in en_name_to_char_id:
+                            char_id = en_name_to_char_id[char_en_name]
+                        else:
+                            # 尝试模糊匹配（去掉数字）
+                            base_name = re.sub(r'\d+$', '', char_en_name)
+                            for name, cid in en_name_to_char_id.items():
+                                if base_name in name or name in base_name:
+                                    char_id = cid
+                                    break
+                elif skill_id.startswith("skcom_"):
+                    # 通用技能，跳过
+                    continue
+                elif "[" in skill_id and "]" in skill_id:
                     # 格式：skcom_charge_cost[1], skcom_assist_cost[2] 等
                     # 这些可能是通用技能，不是特定干员的技能
                     match = re.search(r'^([^\[]+)\[', skill_id)
@@ -434,6 +484,7 @@ class MyPlugin(Star):
                 logger.info(f"✓ 阿米娅的技能已缓存：{len(self._skills_cache['char_002_amiya'])} 个技能")
             else:
                 logger.warning("✗ 阿米娅的技能未找到缓存")
+                logger.warning("提示：skchr_amiya_* 格式的技能需要建立英文名到 char_id 的映射")
         except Exception as e:
             logger.error(f"预加载技能数据失败：{type(e).__name__}: {e}")
             import traceback
