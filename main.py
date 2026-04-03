@@ -239,13 +239,16 @@ class MyPlugin(Star):
                 f"https://ak.hypergryph.com/assets/media/characters/{game_id}.png",  # 官服源 (可能限制访问)
             ]
             
+            # 如果所有图片源都失败，准备备用文本结果
+            text_only_result = result.strip()
+            
             # 尝试发送带图片的消息
             success = False
             for img_url in image_urls:
                 try:
                     logger.debug(f"尝试加载图片：{img_url}")
                     # 先验证图片 URL 是否可访问
-                    async with self.session.get(img_url, timeout=aiohttp.ClientTimeout(total=15)) as r:
+                    async with self.session.get(img_url, timeout=aiohttp.ClientTimeout(total=10)) as r:
                         if r.status == 200:
                             content_type = r.headers.get('Content-Type', '')
                             # 检查是否为图片类型或内容长度合理
@@ -253,7 +256,7 @@ class MyPlugin(Star):
                             logger.debug(f"图片源响应 {img_url}: HTTP {r.status}, Content-Type: {content_type}, Length: {content_length}")
                             if ('image' in content_type or content_length > 1000) and content_length < 10 * 1024 * 1024:
                                 chain = [
-                                    Comp.Plain(result.strip()),
+                                    Comp.Plain(text_only_result),
                                     Comp.Image.fromURL(img_url)
                                 ]
                                 yield event.chain_result(chain)
@@ -266,19 +269,19 @@ class MyPlugin(Star):
                             logger.debug(f"图片源返回错误 {img_url}: HTTP {r.status}")
                             continue
                 except asyncio.TimeoutError:
-                    logger.warning(f"图片源超时 {img_url} (15 秒)")
+                    logger.debug(f"图片源超时 {img_url} (10 秒)")
                     continue
                 except aiohttp.ClientError as e:
-                    logger.warning(f"图片源请求失败 {img_url}: {type(e).__name__}: {e}")
+                    logger.debug(f"图片源请求失败 {img_url}: {type(e).__name__}: {e}")
                     continue
                 except Exception as e:
-                    logger.warning(f"图片源失败 {img_url}: {type(e).__name__}: {e}")
+                    logger.debug(f"图片源失败 {img_url}: {type(e).__name__}: {e}")
                     continue
             
             # 所有图片源都失败，只发送文本
             if not success:
                 logger.warning("所有图片源加载失败，仅发送文本信息")
-                yield event.plain_result(result.strip())
+                yield event.plain_result(text_only_result)
 
     def _convert_rarity(self, rarity_value):
         """转换稀有度字段为数字
@@ -344,11 +347,25 @@ class MyPlugin(Star):
                 if "name" in info:
                     en_name = info["name"]
                     # 存储多个版本：原名、小写、去除空格等
-                    en_name_to_char_id[en_name.lower()] = char_id
-                    # 也存储不带空格的版本
-                    en_name_to_char_id[en_name.replace(" ", "").lower()] = char_id
+                    en_name_lower = en_name.lower()
+                    en_name_no_space = en_name.replace(" ", "").lower()
+                    
+                    # 原始名称
+                    en_name_to_char_id[en_name_lower] = char_id
+                    # 不带空格
+                    en_name_to_char_id[en_name_no_space] = char_id
+                    # 去掉括号内容（如果有）
+                    if '(' in en_name:
+                        base_name = en_name.split('(')[0].strip().lower()
+                        en_name_to_char_id[base_name] = char_id
+                        en_name_to_char_id[base_name.replace(" ", "")] = char_id
             
             logger.info(f"建立了 {len(en_name_to_char_id)} 个干员英文名到 ID 的映射")
+            
+            # 调试：打印阿米娅相关的映射
+            amiya_mappings = {k: v for k, v in en_name_to_char_id.items() if 'amiya' in k}
+            if amiya_mappings:
+                logger.info(f"阿米娅的映射：{amiya_mappings}")
             
             # 预处理技能数据，建立 char_id 到技能的映射
             count = 0
@@ -390,16 +407,43 @@ class MyPlugin(Star):
                     match = re.search(r'skchr_([^_]+)_\d+', skill_id)
                     if match:
                         char_en_name = match.group(1).lower()  # 如：amiya, amiya2, blackd
-                        # 在映射表中查找
+                        logger.debug(f"技能 {skill_id} 提取出英文名：{char_en_name}")
+                        
+                        # 在映射表中查找 - 精确匹配
                         if char_en_name in en_name_to_char_id:
                             char_id = en_name_to_char_id[char_en_name]
+                            logger.debug(f"✓ 精确匹配成功：{char_en_name} -> {char_id}")
                         else:
-                            # 尝试模糊匹配（去掉数字）
+                            # 尝试去掉末尾数字
                             base_name = re.sub(r'\d+$', '', char_en_name)
-                            for name, cid in en_name_to_char_id.items():
-                                if base_name in name or name in base_name:
-                                    char_id = cid
-                                    break
+                            logger.debug(f"尝试模糊匹配基名：{base_name}")
+                            
+                            # 方法 1：直接匹配基名
+                            if base_name in en_name_to_char_id:
+                                char_id = en_name_to_char_id[base_name]
+                                logger.debug(f"✓ 基名匹配成功：{base_name} -> {char_id}")
+                            else:
+                                # 方法 2：遍历查找包含关系
+                                for name, cid in en_name_to_char_id.items():
+                                    # 检查映射名是否以基名开头或包含基名
+                                    if name.startswith(base_name) or base_name in name:
+                                        char_id = cid
+                                        logger.debug(f"✓ 包含匹配成功：{base_name} in {name} -> {char_id}")
+                                        break
+                                    # 检查是否只是数字差异
+                                    name_base = re.sub(r'\d+$', '', name)
+                                    if name_base == base_name and len(name_base) > 2:
+                                        char_id = cid
+                                        logger.debug(f"✓ 去数字匹配成功：{name} -> {char_id}")
+                                        break
+                        
+                        if not char_id:
+                            logger.debug(f"✗ 无法匹配：{char_en_name}")
+                            # 特殊处理：如果是 amiya2/amiya3，尝试匹配 amiya
+                            if 'amiya' in char_en_name:
+                                if 'amiya' in en_name_to_char_id:
+                                    char_id = en_name_to_char_id['amiya']
+                                    logger.debug(f"✓ 特殊匹配阿米娅：amiya -> {char_id}")
                 elif skill_id.startswith("skcom_"):
                     # 通用技能，跳过
                     continue
